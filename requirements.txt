@@ -1,2 +1,6 @@
-torch
+k2
+lhotse@git+https://github.com/lhotse-speech/lhotse
+tensorboard
+torch>=1.6.0
+torchaudio
 
