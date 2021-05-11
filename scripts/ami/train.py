@@ -18,14 +18,16 @@ from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, Optional, Tuple
 
 from lhotse import CutSet
-from lhotse.dataset import VadDataset, SingleCutSampler
+from lhotse.dataset import SingleCutSampler
 from lhotse.utils import fix_random_seed
 from snowfall.common import describe
 from snowfall.common import load_checkpoint, save_checkpoint
 from snowfall.common import save_training_info
 from snowfall.common import setup_logger
 from snowfall.models import AcousticModel
-from snowfall.models.tdnn_lstm import TdnnLstm1b
+
+from ovad.dataset import K2VadDataset
+from ovad.models import TdnnLstm1a
 
 
 def get_objf(
@@ -34,12 +36,15 @@ def get_objf(
     device: torch.device,
     training: bool,
     optimizer: Optional[torch.optim.Optimizer] = None,
+    class_weights: Optional[torch.Tensor] = None,
 ):
     feature = batch["inputs"]  # (N, T, C)
-    supervisions = batch["is_voice"].unsqueeze(-1).long()  # (N, T, 1)
+    supervisions = batch["supervisions"]["is_voice"].unsqueeze(-1).long()  # (N, T, 1)
 
     feature = feature.to(device)
     supervisions = supervisions.to(device)
+    if class_weights is not None:
+        class_weights = class_weights.to(device)
     # at entry, feature is [N, T, C]
     feature = feature.permute(0, 2, 1)  # now feature is [N, C, T]
     if training:
@@ -52,7 +57,7 @@ def get_objf(
     nnet_output = nnet_output.permute(0, 2, 1)  # now nnet_output is [N, T, C]
 
     # Compute cross-entropy loss
-    xent_loss = torch.nn.CrossEntropyLoss(reduction="sum")
+    xent_loss = torch.nn.CrossEntropyLoss(reduction="sum", weight=class_weights)
     tot_score = xent_loss(
         nnet_output.contiguous().view(-1, 2), supervisions.contiguous().view(-1)
     )
@@ -61,7 +66,7 @@ def get_objf(
         optimizer.zero_grad()
         tot_score.backward()
         clip_grad_value_(model.parameters(), 5.0)
-        optimizer.step()
+        optimizer.step(),
 
     ans = (
         tot_score.detach().cpu().item(),  # total objective function value
@@ -109,6 +114,7 @@ def train_one_epoch(
         global_batch_idx_train += 1
         timestamp = datetime.now()
         time_waiting_for_batch += (timestamp - prev_timestamp).total_seconds()
+
         curr_batch_objf, curr_batch_frames = get_objf(
             batch, model, device, True, optimizer
         )
@@ -172,10 +178,19 @@ def train_one_epoch(
 def main():
     fix_random_seed(42)
 
-    start_epoch = 0
-    num_epochs = 10
+    if not torch.cuda.is_available():
+        logging.error("No GPU detected!")
+        sys.exit(-1)
+    device_id = 0
+    device = torch.device("cuda", device_id)
 
-    exp_dir = "exp-lstm-adam-xent"
+    # Reserve the GPU with a dummy variable
+    reserve_variable = torch.ones(1).to(device)
+
+    start_epoch = 0
+    num_epochs = 100
+
+    exp_dir = "exp-tl1a-adam-xent"
     setup_logger("{}/log/log-train".format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f"{exp_dir}/tensorboard")
 
@@ -187,7 +202,7 @@ def main():
     cuts_dev = CutSet.from_json(feature_dir / "cuts_dev.json.gz")
 
     logging.info("About to create train dataset")
-    train = VadDataset(cuts_train)
+    train = K2VadDataset(cuts_train)
     train_sampler = SingleCutSampler(
         cuts_train,
         max_frames=90000,
@@ -198,21 +213,15 @@ def main():
         train, sampler=train_sampler, batch_size=None, num_workers=4
     )
     logging.info("About to create dev dataset")
-    validate = VadDataset(cuts_dev)
+    validate = K2VadDataset(cuts_dev)
     valid_sampler = SingleCutSampler(cuts_dev, max_frames=90000)
     logging.info("About to create dev dataloader")
     valid_dl = torch.utils.data.DataLoader(
         validate, sampler=valid_sampler, batch_size=None, num_workers=1
     )
 
-    if not torch.cuda.is_available():
-        logging.error("No GPU detected!")
-        sys.exit(-1)
-
     logging.info("About to create model")
-    device_id = 0
-    device = torch.device("cuda", device_id)
-    model = TdnnLstm1b(
+    model = TdnnLstm1a(
         num_features=80,
         num_classes=2,  # speech/silence
         subsampling_factor=1,
@@ -221,7 +230,7 @@ def main():
     model.to(device)
     describe(model)
 
-    learning_rate = 1e-3
+    learning_rate = 1e-4
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=5e-4)
 
     best_objf = np.inf
@@ -243,8 +252,7 @@ def main():
 
     for epoch in range(start_epoch, num_epochs):
         train_sampler.set_epoch(epoch)
-        curr_learning_rate = 1e-3
-
+        curr_learning_rate = learning_rate
         tb_writer.add_scalar("learning_rate", curr_learning_rate, epoch)
 
         logging.info("epoch {}, learning rate {}".format(epoch, curr_learning_rate))

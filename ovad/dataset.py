@@ -120,7 +120,7 @@ class K2VadDataset(torch.utils.data.Dataset):
         batch = {
             "inputs": inputs,
             "supervisions": {
-                "sequence_idx": list(range(inputs.shape[0])),
+                "sequence_idx": torch.Tensor(range(inputs.shape[0])),
                 "is_voice": masks,
                 "start_frame": torch.zeros(inputs.shape[0]),
                 "duration": torch.Tensor(

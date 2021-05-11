@@ -3,19 +3,14 @@
 # Copyright 2021  Johns Hopkins University (author: Desh Raj)
 # Apache 2.0
 
-"""
-Prepares a graph with a simple HMM topology for segmentation
-with minimum and maximum speech duration constraints and minimum silence
-duration constraint.
-"""
-
 import argparse
 import logging
 import math
 
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass
 
+import torch
 from k2 import Fsa
 
 
@@ -60,14 +55,15 @@ def prepare_decoding_graph(
     :param edge_silence_probability (default = 0.5), probability of silence at the edges
     :param transition_probability (default = 0.1), transition probability for silence to
         speech, or vice versa
+    :return: a k2.Fsa type with the encoded constraints
     """
 
     min_states_silence = int(min_silence_duration / frame_shift + 0.5)
     min_states_speech = int(min_speech_duration / frame_shift + 0.5)
     max_states_speech = int(max_speech_duration / frame_shift + 0.5)
 
-    silence = "1"
-    speech = "2"
+    silence = "0"
+    speech = "1"
 
     transitions = []
 
@@ -169,4 +165,5 @@ def prepare_decoding_graph(
     transitions = "\n".join([str(t) for t in sorted(transitions, key=lambda x: x.src)])
 
     graph = Fsa.from_str(transitions)
+
     return graph

@@ -113,7 +113,6 @@ def main():
                 executor=ex,
                 storage_type=LilcomHdf5Writer,
             ).pad(duration=5.0)
-            ami_manifests[partition]["cuts"] = cut_set
             cut_set.to_json(output_dir / f"cuts_{partition}.json.gz")
 
 
