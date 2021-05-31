@@ -1,7 +1,6 @@
 from typing import Callable, Dict, List, Union
 
 import torch
-from torch.utils.data.dataloader import DataLoader, default_collate
 
 from lhotse import validate
 from lhotse.cut import CutSet
@@ -111,7 +110,9 @@ class K2VadDataset(torch.utils.data.Dataset):
         # Get a tensor with batched feature matrices, shape (B, T, F)
         # Collation performs auto-padding, if necessary.
         inputs, _ = self.input_strategy(cuts)
-        masks = self.input_strategy.supervision_masks(cuts)
+        masks = self.input_strategy.supervision_masks(
+            cuts, use_alignment_if_exists='word'
+        )
         # Apply all available transforms on the inputs, i.e. either audio or features.
         # This could be feature extraction, global MVN, SpecAugment, etc.
         for tnfm in self.input_transforms:
